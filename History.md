@@ -1,3 +1,48 @@
+## 0.10.2
+
+* update Bouncy-Castle to 1.61 (and handle supported BC compatibility)
+* [fix] avoid NPE when CRL fails to parse (invalid str) (jruby/jruby#5619)
+* hide (deprecated) Jopenssl constant 
+* default OpenSSL.warn to warnings-enabled flag
+* only un-restrict jce when its restricted
+* OpenSSL::Cipher#update additional buffer argument (#170) (jruby/jruby#5242)
+
+## 0.10.1
+
+* loading JOpenSSL's native ext part the JRuby 9.2 (internal) way
+* avoid, once again, installing BC provider on boot (due OCSP support)
+* [feat] support OpenSSL::KDF as a (semi) OpenSSL::PKCS5 replacement
+* rename ugly-sh "Jopenssl" constant to **JOpenSSL**
+* support PKCS7#decrypt with 1 argument (pkey only - without certificate)
+* undo some of the call-sites in SSLSocket - account for sub-classes (#165)
+* follow-up to provide == for X.509 types (like C-OpenSSL does in 2.1) 
+* validate iter parameter on Cipher#pkcs5_keyivgen (since OpenSSL 2.0.8)
+* remove openssl/pkcs7.rb -> since 1.8 no longer supported
+
+## 0.10.0
+
+**NOTE:** dropped support for anything below ~ JRuby 1.7.20
+
+* drop support for Java 1.6 and compile using Java 7
+* improve java.version detection for Java 9/10 (pre-releases)
+* subject alt name parsing fixes (#140) - thanks @roadrunner2
+* fix loading of Subject/Issuer-Alt-Name extensions. (#144)
+* normalize all constants in CipherStrings as public (#146)
+* upgrade BC to **1.59** and dropped support for BC < 1.55
+* include BC's JSSE provider as we're planning on using it, eventually
+* setup OpenSSL::ExtConfig emulation - mostly (conservative) guesses
+* at last, do BN comparison `==` vs `eql?` properly - just like MRI
+* get `BN.new("...", 0)` working as OpenSSL does - using MPI format
+* allow for SSLContext#dup to work (copy-ing Ruby level i-vars only)
+* fix signature-alg to default to NULL and report it as 0.0 (like MRI)
+* account for ASN1Integers when transforming issuer serial numbers 
+  to_text in AuthorityKeyIdentifier extensions (#147) - thanks @lampad
+* copy bytes since it might be a shared (unsafe) buffer (#150)
+* don't use padding for streaming cipher modes (#155) - thanks @dgolombek
+* avoid ByteList#length() usage for forward (JRuby 9.2) compatibility
+* prepare for using BC's JSSE implementation as an SSL support backend
+  allow to set SSL provider name (-Djruby.openssl.ssl.provider=...)
+
 ## 0.9.21
 
 * adjust X.509 value handling to parse subjectAltName recursively (#134)

@@ -89,12 +89,7 @@ public class BN extends RubyObject {
         return new BN(runtime, value != null ? value : BigInteger.ZERO);
     }
 
-    //static BN newInstance(final Ruby runtime, long value) {
-    //    return new BN(runtime, BigInteger.valueOf(value));
-    //}
-
-    public static void createBN(final Ruby runtime, final RubyModule OpenSSL) {
-        final RubyClass OpenSSLError = OpenSSL.getClass("OpenSSLError");
+    static void createBN(final Ruby runtime, final RubyModule OpenSSL, final RubyClass OpenSSLError) {
         OpenSSL.defineClassUnder("BNError", OpenSSLError, OpenSSLError.getAllocator());
 
         RubyClass BN = OpenSSL.defineClassUnder("BN", runtime.getObject(), BN_ALLOCATOR);
@@ -110,7 +105,7 @@ public class BN extends RubyObject {
     }
 
     protected BN(Ruby runtime, BigInteger value) {
-        super(runtime, runtime.getModule("OpenSSL").getClass("BN"));
+        super(runtime, (RubyClass) runtime.getModule("OpenSSL").getConstantAt("BN"));
         this.value = value;
     }
 
@@ -119,8 +114,7 @@ public class BN extends RubyObject {
     }
 
     @JRubyMethod(name="initialize", required=1, optional=1, visibility = Visibility.PRIVATE)
-    public IRubyObject initialize(final ThreadContext context,
-        final IRubyObject[] args) {
+    public IRubyObject initialize(final ThreadContext context, final IRubyObject[] args) {
         final Ruby runtime = context.runtime;
         if (this.value != BigInteger.ZERO) { // already initialized
             throw newBNError(runtime, "illegal initialization");
@@ -130,14 +124,7 @@ public class BN extends RubyObject {
         final RubyString str = args[0].asString();
         switch (base) {
         case 0:
-            final byte[] bytes = str.getBytes(); final int signum;
-            if ( ( bytes[0] & 0x80 ) != 0 ) {
-                bytes[0] &= 0x7f; signum = -1;
-            }
-            else {
-                signum = 1;
-            }
-            this.value = new BigInteger(signum, bytes);
+            this.value = initBigIntegerMPI(runtime, str);
             break;
         case 2:
             // this seems wrong to me, but is the behavior of the
@@ -151,20 +138,46 @@ public class BN extends RubyObject {
         case 10:
         case 16:
             // here, the ASCII-encoded decimal or hex string is used
-            try {
-                this.value = new BigInteger(str.toString(), base);
-                break;
-            } catch (NumberFormatException e) {
-                throw runtime.newArgumentError("value " + str + " is not legal for radix " + base);
-            }
+            this.value = initBigIntegerBase(runtime, str, base);
+            break;
         default:
             throw runtime.newArgumentError("illegal radix: " + base);
         }
         return this;
     }
 
+    private static BigInteger initBigIntegerMPI(final Ruby runtime, RubyString str) {
+        final ByteList byteList = str.getByteList();
+        final int off = byteList.getBegin();
+        final byte[] b = byteList.getUnsafeBytes();
+
+        long len = ((b[off] & 0xFFl) << 24) | ((b[off+1] & 0xFF) << 16) | ((b[off+2] & 0xFF) << 8) | (b[off+3] & 0xFF);
+        final byte[] bytes = new byte[(int) len];
+        System.arraycopy(b, off + 4, bytes, 0, bytes.length);
+
+        final int signum;
+        if ( (bytes[0] & 0x80) == 0x80 ) {
+            signum = -1; bytes[0] &= 0x7f;
+        }
+        else {
+            signum = +1;
+        }
+        return new BigInteger(signum, bytes);
+
+    }
+
+    private static BigInteger initBigIntegerBase(final Ruby runtime, RubyString str, final int base) {
+        // here, the ASCII-encoded decimal or hex string is used
+        try {
+            return new BigInteger(str.toString(), base);
+        }
+        catch (NumberFormatException e) {
+            throw runtime.newArgumentError("value " + str + " is not legal for radix " + base);
+        }
+    }
+
     @Override
-    public synchronized IRubyObject initialize_copy(final IRubyObject that) {
+    public IRubyObject initialize_copy(final IRubyObject that) {
         super.initialize_copy(that);
         if ( this != that ) this.value = ((BN) that).value;
         return this;
@@ -178,22 +191,20 @@ public class BN extends RubyObject {
         return this;
     }
 
-    @JRubyMethod(name = "to_s", rest = true, optional = 1)
+    @Deprecated
     public RubyString to_s(IRubyObject[] args) {
         int argc = Arity.checkArgumentCount(getRuntime(), args, 0, 1);
         return to_s( argc == 1 ? RubyNumeric.num2int(args[0]) : 10 );
     }
 
-    // 1.6.8 can not handle - this way :
-
     @Override
-    //@JRubyMethod(name = "to_s")
+    @JRubyMethod(name = "to_s")
     public RubyString to_s() { return to_s(10); }
 
-    //@JRubyMethod(name = "to_s")
-    //public RubyString to_s(IRubyObject base) {
-    //    return to_s( RubyNumeric.num2int(base) );
-    //}
+    @JRubyMethod(name = "to_s")
+    public RubyString to_s(IRubyObject base) {
+        return to_s( RubyNumeric.num2int(base) );
+    }
 
     private RubyString to_s(final int base) {
         final Ruby runtime = getRuntime();
@@ -344,8 +355,18 @@ public class BN extends RubyObject {
         return context.runtime.newFixnum( value.abs().compareTo( asBigInteger(other).abs() ) );
     }
 
-    @JRubyMethod(name={"eql?", "==", "==="})
-    public RubyBoolean eql_p(final ThreadContext context, IRubyObject other) {
+    @JRubyMethod(name = "eql?")
+    public IRubyObject eql_p(ThreadContext context, IRubyObject other) {
+        return context.runtime.newBoolean(eql(other));
+    }
+
+    @Override
+    public boolean eql(IRubyObject other) {
+        return equals(other);
+    }
+
+    @JRubyMethod(name = "==")
+    public IRubyObject op_equal(ThreadContext context, IRubyObject other) {
         return context.runtime.newBoolean( value.equals( asBigInteger(other) ) );
     }
 

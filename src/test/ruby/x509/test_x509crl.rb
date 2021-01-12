@@ -11,11 +11,13 @@ class TestX509CRL < TestCase
     assert_equal nil, crl.last_update
     assert_equal nil, crl.next_update
     assert_equal [], crl.revoked
-    assert_equal "itu-t", crl.signature_algorithm
+    assert_equal "NULL", crl.signature_algorithm
 
     if RUBY_VERSION >= '2.0.0' || defined? JRUBY_VERSION
       assert crl.inspect.index('#<OpenSSL::X509::CRL:') == 0, crl.inspect
     end
+
+    assert_raises(OpenSSL::X509::CRLError) { OpenSSL::X509::CRL.new('') }
   end
 
 REVOKED_TEXT = <<EOF
@@ -140,7 +142,7 @@ EOF
     exts = crl.extensions
 
     # MRI expects to retain extension order : crlNumber, authorityKeyIdentifier, issuerAltName
-    exts = exts.dup;
+    exts = exts.dup
     ext1 = exts.find { |ext| ext.oid == 'authorityKeyIdentifier' }
     exts.delete(ext1); exts.unshift(ext1)
     ext0 = exts.find { |ext| ext.oid == 'crlNumber' }

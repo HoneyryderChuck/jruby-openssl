@@ -62,14 +62,8 @@ abstract class StringHelper {
     }
 
     static ByteList setByteListShared(final RubyString str) {
-        try {
-            str.setByteListShared();
-            return str.getByteList();
-        }
-        catch (NoSuchMethodError err) { // JRuby 1.6
-            RubyString dup = (RubyString) str.dup();
-            return dup.getByteList();
-        }
+        str.setByteListShared();
+        return str.getByteList();
     }
 
     static RubyString newUTF8String(final Ruby runtime, final ByteList bytes) {
@@ -107,7 +101,10 @@ abstract class StringHelper {
         catch (IOException e) {
             // this is not PEM encoded, let's use the default argument
         }
-        return bytes;
+        if ( offset == 0 && length == bytes.length ) return bytes;
+        byte[] copy = new byte[length];
+        System.arraycopy(bytes, offset, copy, 0, length);
+        return copy;
     }
 
     static RubyString readPossibleDERInput(final ThreadContext context, final IRubyObject arg) {

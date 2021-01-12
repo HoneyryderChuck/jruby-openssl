@@ -123,11 +123,7 @@ public class SSLContext extends RubyObject {
         SSL_VERSION_OSSL2JSSE.put("SSLv23_server", "SSL");
         SSL_VERSION_OSSL2JSSE.put("SSLv23_client", "SSL");
 
-        if ( OpenSSL.javaVersion7(true) ) { // >= 1.7
-            ENABLED_PROTOCOLS.put("SSL", new String[] { "SSLv2", "SSLv3", "TLSv1", "TLSv1.1", "TLSv1.2" });
-        } else {
-            ENABLED_PROTOCOLS.put("SSL", new String[] { "SSLv2", "SSLv3", "TLSv1" });
-        }
+        ENABLED_PROTOCOLS.put("SSL", new String[] { "SSLv2", "SSLv3", "TLSv1", "TLSv1.1", "TLSv1.2" });
 
         // Historically we were ahead of MRI to support TLS
         // ... thus the non-standard names version names :
@@ -181,7 +177,6 @@ public class SSLContext extends RubyObject {
         SSLContext.defineAlias("ssl_timeout=", "timeout=");
 
         SSLContext.defineAnnotatedMethods(SSLContext.class);
-        SSLContext.undefineMethod("dup");
 
         final Set<String> methodKeys = SSL_VERSION_OSSL2JSSE.keySet();
         final RubyArray methods = runtime.newArray( methodKeys.size() );
@@ -290,6 +285,15 @@ public class SSLContext extends RubyObject {
     public IRubyObject initialize(IRubyObject[] args) {
         if ( args.length > 0 ) set_ssl_version(args[0]);
         return initializeImpl();
+    }
+
+    @Override
+    public IRubyObject initialize_copy(IRubyObject original) {
+        return super.initialize_copy(original);
+        // NOTE: only instance variables (no internal state) on #dup
+        // final SSLContext that = (SSLContext) original;
+        // this.ciphers = that.ciphers;
+        // return this;
     }
 
     final SSLContext initializeImpl() { return this; }
@@ -526,54 +530,6 @@ public class SSLContext extends RubyObject {
 
     final String getProtocol() { return this.protocol; }
 
-    // ##
-    // # Sets the parameters for this SSL context to the values in +params+.
-    // # The keys in +params+ must be assignment methods on SSLContext.
-    // #
-    // # If the verify_mode is not VERIFY_NONE and ca_file, ca_path and
-    // # cert_store are not set then the system default certificate store is
-    // # used.
-    //
-    //  def set_params(params={})
-    //    params = DEFAULT_PARAMS.merge(params)
-    //    params.each{|name, value| self.__send__("#{name}=", value) }
-    //    if self.verify_mode != OpenSSL::SSL::VERIFY_NONE
-    //      unless self.ca_file or self.ca_path or self.cert_store
-    //        self.cert_store = DEFAULT_CERT_STORE
-    //      end
-    //    end
-    //    return params
-    //  end
-
-    @JRubyMethod(optional = 1)
-    public IRubyObject set_params(final ThreadContext context, final IRubyObject[] args) {
-        final RubyHash params;
-        final RubyClass SSLContext = _SSLContext(context.runtime);
-        RubyHash DEFAULT_PARAMS = (RubyHash) SSLContext.getConstantAt("DEFAULT_PARAMS");
-        if ( args.length == 0 ) params = DEFAULT_PARAMS;
-        else {
-            params = (RubyHash) DEFAULT_PARAMS.merge(context, args[0], Block.NULL_BLOCK);
-        }
-        final SSLContext self = this;
-        params.visitAll(new RubyHash.Visitor() {
-            @Override
-            public void visit(IRubyObject name, IRubyObject value) {
-                self.callMethod(context, name.toString() + '=', value);
-            }
-        });
-        IRubyObject verify_mode = self.getInstanceVariable("@verify_mode");
-        if ( verify_mode != null && ! verify_mode.isNil()
-          && RubyNumeric.fix2int(verify_mode) != SSL.VERIFY_NONE ) {
-          if ( ! hasNonNilInstanceVariable(self, "@ca_file")
-            && ! hasNonNilInstanceVariable(self, "@ca_path")
-            && ! hasNonNilInstanceVariable(self, "@cert_store") ) {
-            IRubyObject DEFAULT_CERT_STORE = SSLContext.getConstantAt("DEFAULT_CERT_STORE");
-            self.setInstanceVariable("@cert_store", DEFAULT_CERT_STORE);
-          }
-        }
-        return params;
-    }
-
     @JRubyMethod(name = "session_cache_mode")
     public IRubyObject session_cache_mode() {
         return getRuntime().getNil();
@@ -584,7 +540,7 @@ public class SSLContext extends RubyObject {
     public IRubyObject set_session_cache_mode(IRubyObject mode) {
         //this.sessionCacheMode = RubyInteger.fix2int(mode);
         //return mode;
-        warn(getRuntime().getCurrentContext(), "SSLContext#session_cache_mode= has no effect under JRuby");
+        warn(getRuntime().getCurrentContext(), "OpenSSL::SSL::SSLContext#session_cache_mode= has no effect under JRuby");
         return session_cache_mode();
     }
 
@@ -611,9 +567,14 @@ public class SSLContext extends RubyObject {
         return RubyHash.newHash(context.runtime);
     }
 
+    @JRubyMethod(name = "security_level")
+    public IRubyObject security_level(ThreadContext context) {
+        return context.runtime.newFixnum(0);
+    }
+
     @JRubyMethod(name = "security_level=")
     public IRubyObject set_security_level(ThreadContext context, IRubyObject level) {
-        warn(context, "WARNING: SSLContext#security_level= has no effect under JRuby");
+        warn(context, "OpenSSL::SSL::SSLContext#security_level= has no effect under JRuby");
         return context.nil;
     }
 
@@ -859,7 +820,7 @@ public class SSLContext extends RubyObject {
             final List<X509AuxCertificate> clientCert,
             final List<X509AuxCertificate> extraChainCert,
             final int verifyMode,
-            final int timeout) throws NoSuchAlgorithmException, KeyManagementException {
+            final int timeout) throws NoSuchAlgorithmException {
 
             if ( pKey != null && xCert != null ) {
                 this.privateKey = pKey.getPrivateKey();
@@ -876,30 +837,16 @@ public class SSLContext extends RubyObject {
             this.clientCert = clientCert;
             this.extraChainCert = extraChainCert;
             this.verifyMode = verifyMode;
-            //this.timeout = timeout;
+            this.timeout = timeout;
 
             // initialize SSL context :
 
             final javax.net.ssl.SSLContext sslContext = SecurityHelper.getSSLContext(protocol);
 
-            if ( protocolForClient ) {
-                final SSLSessionContext clientContext = sslContext.getClientSessionContext();
-                clientContext.setSessionTimeout(timeout);
-                if ( sessionCacheSize >= 0 ) {
-                    clientContext.setSessionCacheSize(sessionCacheSize);
-                }
-            }
-            if ( protocolForServer ) {
-                final SSLSessionContext serverContext = sslContext.getClientSessionContext();
-                serverContext.setSessionTimeout(timeout);
-                if ( sessionCacheSize >= 0 ) {
-                    serverContext.setSessionCacheSize(sessionCacheSize);
-                }
-            }
             this.sslContext = sslContext;
         }
 
-        protected void initSSLContext(final ThreadContext context) throws KeyManagementException {
+        void initSSLContext(final ThreadContext context) throws KeyManagementException {
             final KeyManager[] keyManager = new KeyManager[] { new KeyManagerImpl(this) };
             final TrustManager[] trustManager = new TrustManager[] { new TrustManagerImpl(this) };
             // SSLContext (internals) on Sun JDK :
@@ -909,6 +856,21 @@ public class SSLContext extends RubyObject {
             // if secureRandom == null JSSE will try :
             // - new SecureRandom();
             // - SecureRandom.getInstance("PKCS11", cryptoProvider);
+
+            if ( protocolForClient ) {
+                final SSLSessionContext clientContext = sslContext.getClientSessionContext();
+                clientContext.setSessionTimeout(timeout);
+                if ( sessionCacheSize >= 0 ) {
+                    clientContext.setSessionCacheSize(sessionCacheSize);
+                }
+            }
+            if ( protocolForServer ) {
+                final SSLSessionContext serverContext = sslContext.getServerSessionContext();
+                serverContext.setSessionTimeout(timeout);
+                if ( sessionCacheSize >= 0 ) {
+                    serverContext.setSessionCacheSize(sessionCacheSize);
+                }
+            }
         }
 
         final Store store;
@@ -921,7 +883,7 @@ public class SSLContext extends RubyObject {
         final List<X509AuxCertificate> clientCert; // assumed always != null
         final List<X509AuxCertificate> extraChainCert; // empty assumed == null
 
-        //final int timeout;
+        private final int timeout;
 
         private final javax.net.ssl.SSLContext sslContext;
 

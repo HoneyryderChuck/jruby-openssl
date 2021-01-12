@@ -64,9 +64,8 @@ public class X509Store extends RubyObject {
         }
     };
 
-    public static void createX509Store(final Ruby runtime, final RubyModule X509) {
+    static void createX509Store(final Ruby runtime, final RubyModule X509, final RubyClass OpenSSLError) {
         RubyClass Store = X509.defineClassUnder("Store", runtime.getObject(), X509STORE_ALLOCATOR);
-        RubyClass OpenSSLError = runtime.getModule("OpenSSL").getClass("OpenSSLError");
         X509.defineClassUnder("StoreError", OpenSSLError, OpenSSLError.getAllocator());
 
         final ThreadContext context = runtime.getCurrentContext();
@@ -157,7 +156,7 @@ public class X509Store extends RubyObject {
 
     @JRubyMethod
     public IRubyObject add_path(final ThreadContext context, final IRubyObject arg) {
-        warn(context, "WARNING: unimplemented method called: Store#add_path");
+        warn(context, "WARNING: unimplemented method called: OpenSSL::X509::Store#add_path");
         return context.nil;
     }
 

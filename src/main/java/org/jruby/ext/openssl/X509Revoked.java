@@ -64,12 +64,10 @@ public class X509Revoked extends RubyObject {
         }
     };
 
-    public static void createX509Revoked(final Ruby runtime, final RubyModule _X509) {
-        RubyClass _Revoked = _X509.defineClassUnder("Revoked", runtime.getObject(), X509REVOKED_ALLOCATOR);
-        RubyClass _OpenSSLError = runtime.getModule("OpenSSL").getClass("OpenSSLError");
-        _X509.defineClassUnder("RevokedError", _OpenSSLError, _OpenSSLError.getAllocator());
-
-        _Revoked.defineAnnotatedMethods(X509Revoked.class);
+    static void createX509Revoked(final Ruby runtime, final RubyModule X509, final RubyClass OpenSSLError) {
+        RubyClass Revoked = X509.defineClassUnder("Revoked", runtime.getObject(), X509REVOKED_ALLOCATOR);
+        X509.defineClassUnder("RevokedError", OpenSSLError, OpenSSLError.getAllocator());
+        Revoked.defineAnnotatedMethods(X509Revoked.class);
     }
 
     static RubyClass _Revoked(final Ruby runtime) {
@@ -172,7 +170,7 @@ public class X509Revoked extends RubyObject {
 
     @JRubyMethod
     public IRubyObject add_extension(final ThreadContext context, final IRubyObject ext) {
-        return extensions().callMethod(context, "<<", ext);
+        return extensions().append(ext);
     }
 
     @Override

@@ -106,9 +106,8 @@ public class X509Cert extends RubyObject {
         }
     };
 
-    public static void createX509Cert(final Ruby runtime, final RubyModule X509) {
+    static void createX509Cert(final Ruby runtime, final RubyModule X509, final RubyClass OpenSSLError) {
         RubyClass Certificate = X509.defineClassUnder("Certificate", runtime.getObject(), X509CERT_ALLOCATOR);
-        RubyClass OpenSSLError = runtime.getModule("OpenSSL").getClass("OpenSSLError");
         X509.defineClassUnder("CertificateError", OpenSSLError, OpenSSLError.getAllocator());
         Certificate.defineAnnotatedMethods(X509Cert.class);
     }
@@ -225,8 +224,8 @@ public class X509Cert extends RubyObject {
         if ( sigAlgorithm == null ) sigAlgorithm = cert.getSigAlgName(); // e.g. SHA256withRSA
         else {
             sigAlgorithm = ASN1.oid2name(runtime, new ASN1ObjectIdentifier(sigAlgorithm), true);
-            if ( sigAlgorithm == null ) {
-                sigAlgorithm = "itu-t"; // MRI compability ... the "crazy" parts
+            if (sigAlgorithm == null) {
+                sigAlgorithm = "0.0"; // "NULL";
                 // for some certificates that MRI parses,
                 // we get getSigAlgOID() == getSigAlgName() == "0.0"
 

@@ -68,6 +68,7 @@ import org.jruby.runtime.ThreadContext;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.runtime.Visibility;
 import org.jruby.util.ByteList;
+import org.jruby.util.TypeConverter;
 
 import static org.jruby.ext.openssl.OpenSSL.*;
 
@@ -81,11 +82,10 @@ public class Cipher extends RubyObject {
         public Cipher allocate(Ruby runtime, RubyClass klass) { return new Cipher(runtime, klass); }
     };
 
-    public static void createCipher(final Ruby runtime, final RubyModule OpenSSL) {
+    static void createCipher(final Ruby runtime, final RubyModule OpenSSL, final RubyClass OpenSSLError) {
         final RubyClass Cipher = OpenSSL.defineClassUnder("Cipher", runtime.getObject(), ALLOCATOR);
-        Cipher.defineAnnotatedMethods(Cipher.class);
-        final RubyClass OpenSSLError = OpenSSL.getClass("OpenSSLError");
         Cipher.defineClassUnder("CipherError", OpenSSLError, OpenSSLError.getAllocator());
+        Cipher.defineAnnotatedMethods(Cipher.class);
 
         String cipherName;
 
@@ -186,8 +186,9 @@ public class Cipher extends RubyObject {
     }
 
     private static Provider.Service providerCipherService(final String alg) {
-        if ( SecurityHelper.securityProvider != null ) {
-            return SecurityHelper.securityProvider.getService("Cipher", alg);
+        Provider securityProvider = SecurityHelper.securityProvider;
+        if ( securityProvider != null ) {
+            return securityProvider.getService("Cipher", alg);
         }
         return null;
     }
@@ -253,12 +254,23 @@ public class Cipher extends RubyObject {
         };
 
         static {
-            KNOWN_BLOCK_MODES = new HashSet<String>();
+            KNOWN_BLOCK_MODES = new HashSet<>(10, 1);
             for ( String mode : OPENSSL_BLOCK_MODES ) KNOWN_BLOCK_MODES.add(mode);
             KNOWN_BLOCK_MODES.add("CTR");
             KNOWN_BLOCK_MODES.add("CTS"); // not supported by OpenSSL
             KNOWN_BLOCK_MODES.add("PCBC"); // not supported by OpenSSL
             KNOWN_BLOCK_MODES.add("NONE"); // valid to pass into JCE
+        }
+
+        // Subset of KNOWN_BLOCK_MODES that do not require padding (and shouldn't have it by default).
+        private static final Set<String> NO_PADDING_BLOCK_MODES;
+        static {
+            NO_PADDING_BLOCK_MODES = new HashSet<>(6, 1);
+            NO_PADDING_BLOCK_MODES.add("CFB");
+            NO_PADDING_BLOCK_MODES.add("CFB8");
+            NO_PADDING_BLOCK_MODES.add("OFB");
+            NO_PADDING_BLOCK_MODES.add("CTR");
+            NO_PADDING_BLOCK_MODES.add("GCM");
         }
 
         // Ruby to Java name String (or FALSE)
@@ -557,12 +569,10 @@ public class Cipher extends RubyObject {
         }
 
         private static String getPaddingType(final String padding, final String cryptoMode) {
-            //if ( "ECB".equals(cryptoMode) ) return "NoPadding";
-            // TODO check cryptoMode CFB/OFB
             final String defaultPadding = "PKCS5Padding";
 
             if ( padding == null ) {
-                if ( "GCM".equalsIgnoreCase(cryptoMode) ) {
+                if ( NO_PADDING_BLOCK_MODES.contains(cryptoMode) ) {
                     return "NoPadding";
                 }
                 return defaultPadding;
@@ -832,7 +842,7 @@ public class Cipher extends RubyObject {
             debugStackTrace(runtime, e);
             throw newCipherError(runtime, e);
         }
-        if ( keyBytes.length() < keyLength ) {
+        if ( keyBytes.getRealSize() < keyLength ) {
             throw newCipherError(context.runtime, "key length too short");
         }
 
@@ -854,7 +864,7 @@ public class Cipher extends RubyObject {
             debugStackTrace(runtime, e);
             throw newCipherError(runtime, e);
         }
-        if ( ivBytes.length() < ivLength ) {
+        if ( ivBytes.getRealSize() < ivLength ) {
             throw newCipherError(context.runtime, "iv length too short");
         }
         // EVP_CipherInit_ex uses leading IV length of given sequence.
@@ -990,14 +1000,17 @@ public class Cipher extends RubyObject {
         byte[] pass = args[0].asString().getBytes();
         byte[] salt = null;
         int iter = 2048;
-        IRubyObject vdigest = runtime.getNil();
+        IRubyObject vdigest = context.nil;
         if ( args.length > 1 ) {
-            if ( ! args[1].isNil() ) {
+            if ( args[1] != context.nil ) {
                 salt = args[1].asString().getBytes();
             }
             if ( args.length > 2 ) {
-                if ( ! args[2].isNil() ) {
-                    iter = RubyNumeric.fix2int(args[2]);
+                if ( args[2] != context.nil ) {
+                    iter = RubyNumeric.num2int(args[2]);
+                    if (iter <= 0) {
+                        throw runtime.newArgumentError("iterations must be a positive integer");
+                    }
                 }
                 if ( args.length > 3 ) {
                     vdigest = args[3];
@@ -1078,7 +1091,6 @@ public class Cipher extends RubyObject {
         }
         cipherInited = true;
         processedDataBytes = 0;
-        //outBuffer = new ByteList(keyLength);
     }
 
     private String getCipherAlgorithm() {
@@ -1087,11 +1099,15 @@ public class Cipher extends RubyObject {
     }
 
     private int processedDataBytes = 0;
-    //private volatile ByteList outBuffer;
     private byte[] lastIV;
 
     @JRubyMethod
     public IRubyObject update(final ThreadContext context, final IRubyObject arg) {
+        return update(context, arg, null);
+    }
+
+    @JRubyMethod
+    public IRubyObject update(final ThreadContext context, final IRubyObject arg, IRubyObject buffer) {
         final Ruby runtime = context.runtime;
 
         if ( isDebug(runtime) ) dumpVars( runtime.getOut(), "update()" );
@@ -1100,7 +1116,7 @@ public class Cipher extends RubyObject {
         checkAuthTag(runtime);
 
         final ByteList data = arg.asString().getByteList();
-        final int length = data.length();
+        final int length = data.getRealSize();
         if ( length == 0 ) {
             throw runtime.newArgumentError("data must not be empty");
         }
@@ -1131,7 +1147,12 @@ public class Cipher extends RubyObject {
             debugStackTrace( runtime, e );
             throw newCipherError(runtime, e);
         }
-        return RubyString.newString(runtime, str);
+
+        if ( buffer == null ) return RubyString.newString(runtime, str);
+
+        buffer = TypeConverter.convertToType(buffer, context.runtime.getString(), "to_str", true);
+        ((RubyString) buffer).setValue(str);
+        return buffer;
     }
 
     @JRubyMethod(name = "<<")
@@ -1219,7 +1240,7 @@ public class Cipher extends RubyObject {
             final byte[] out;
             if ( auth_tag != null ) {
                 final byte[] tag = auth_tag.getUnsafeBytes();
-                out = cipher.doFinal(tag, auth_tag.begin(), auth_tag.length());
+                out = cipher.doFinal(tag, auth_tag.getBegin(), auth_tag.getRealSize());
             }
             else {
                 out = cipher.doFinal();
@@ -1301,7 +1322,7 @@ public class Cipher extends RubyObject {
         if ( auth_data == null ) return false; // only to be set if auth-mode
         //try {
             final byte[] data = auth_data.getUnsafeBytes();
-            cipher.updateAAD(data, auth_data.begin(), auth_data.length());
+            cipher.updateAAD(data, auth_data.getBegin(), auth_data.getRealSize());
         //}
         //catch (RuntimeException e) {
         //    debugStackTrace( runtime, e );

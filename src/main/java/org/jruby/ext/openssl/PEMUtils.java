@@ -45,20 +45,21 @@ import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.RC2ParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
+import org.bouncycastle.crypto.CryptoServicesRegistrar;
 import org.bouncycastle.crypto.PBEParametersGenerator;
 import org.bouncycastle.crypto.generators.OpenSSLPBEParametersGenerator;
 import org.bouncycastle.crypto.params.KeyParameter;
-//import org.bouncycastle.openssl.MiscPEMGenerator;
+import org.bouncycastle.openssl.EncryptionException;
+import org.bouncycastle.openssl.PEMDecryptor;
+import org.bouncycastle.openssl.PEMDecryptorProvider;
+import org.bouncycastle.openssl.PEMEncryptedKeyPair;
+import org.bouncycastle.openssl.PEMException;
+import org.bouncycastle.openssl.PEMKeyPair;
+import org.bouncycastle.openssl.PEMParser;
 import org.bouncycastle.openssl.PEMWriter;
 import org.bouncycastle.operator.OperatorCreationException;
 
-import org.jruby.ext.openssl.impl.pem.MiscPEMGenerator;
-import org.jruby.ext.openssl.impl.pem.PEMDecryptor;
-import org.jruby.ext.openssl.impl.pem.PEMDecryptorProvider;
-import org.jruby.ext.openssl.impl.pem.PEMEncryptedKeyPair;
-import org.jruby.ext.openssl.impl.pem.PEMException;
-import org.jruby.ext.openssl.impl.pem.PEMKeyPair;
-import org.jruby.ext.openssl.impl.pem.PEMParser;
+import org.jruby.ext.openssl.impl.pem.MiscPEMGeneratorHelper;
 import org.jruby.ext.openssl.util.ByteArrayOutputStream;
 //import org.bouncycastle.util.io.pem.PemReader;
 
@@ -145,7 +146,7 @@ public abstract class PEMUtils {
 
     static PEMKeyPair readInternal(final Reader reader, final char[] password) throws IOException {
         Object keyPair = new PEMParser(reader).readObject();
-        if ( keyPair instanceof PEMEncryptedKeyPair ) {
+        if ( keyPair instanceof PEMEncryptedKeyPair) {
             return ((PEMEncryptedKeyPair) keyPair).decryptKeyPair(new PEMDecryptorImpl(password));
         }
         return (PEMKeyPair) keyPair;
@@ -169,9 +170,9 @@ public abstract class PEMUtils {
 
         final PEMWriter pemWriter = new PEMWriter(writer);
 
-        final SecureRandom random = SecurityHelper.getSecureRandom();
+        final SecureRandom random = CryptoServicesRegistrar.getSecureRandom();
 
-        pemWriter.writeObject(MiscPEMGenerator.newInstance(obj, algorithm, password, random));
+        pemWriter.writeObject(MiscPEMGeneratorHelper.newGenerator(obj, algorithm, password, random));
         pemWriter.flush();
     }
 

@@ -10,8 +10,8 @@ class TestX509Certificate < TestCase
     assert_equal empty_name, cert.subject
     bn = OpenSSL::BN.new('0') unless defined? JRUBY_VERSION
     assert_equal bn || OpenSSL::BN.new(0), cert.serial
-    assert_equal nil, cert.not_before
-    assert_equal nil, cert.not_after
+    assert_nil cert.not_before
+    assert_nil cert.not_after
     assert_raise(OpenSSL::X509::CertificateError) { cert.public_key }
   end
 
@@ -73,6 +73,45 @@ END
     end
   end
 
+  def test_aki_extension_to_text
+    cert = create_self_signed_cert [ %w[CN localhost] ], __method__
+    keyid = "97:39:9D:C3:FB:CD:BA:8F:54:0C:90:7B:46:3F:EA:D6:43:75:B1:CB"
+
+    assert cert.extensions.size > 0
+    value = cert.extensions.last.value
+    # assert_equal "keyid:#{keyid}\nDirName:/CN=localhost\nserial:01\n", value
+    assert value.start_with?("keyid:#{keyid}\n")
+    assert value.end_with?("\nserial:01\n")
+  end
+
+  def create_self_signed_cert(cn, comment) # cert generation ripped from WEBrick
+    rsa = OpenSSL::PKey::RSA.new TEST_KEY_RSA2048
+    cert = OpenSSL::X509::Certificate.new
+    cert.version = 2
+    cert.serial = 1
+    name = (cn.kind_of? String) ? OpenSSL::X509::Name.parse(cn) : OpenSSL::X509::Name.new(cn)
+    cert.subject = name
+    cert.issuer = name
+    cert.not_before = Time.now
+    cert.not_after = Time.now + (365*24*60*60)
+    cert.public_key = rsa.public_key
+
+    ef = OpenSSL::X509::ExtensionFactory.new(nil,cert)
+    ef.issuer_certificate = cert
+    cert.extensions = [
+        ef.create_extension("basicConstraints","CA:FALSE"),
+        ef.create_extension("keyUsage", "keyEncipherment"),
+        ef.create_extension("subjectKeyIdentifier", "hash"),
+        ef.create_extension("extendedKeyUsage", "serverAuth"),
+        # ef.create_extension("nsComment", comment),
+    ]
+    aki = ef.create_extension("authorityKeyIdentifier", "keyid:always,issuer:always")
+    cert.add_extension(aki)
+    cert.sign(rsa, OpenSSL::Digest::SHA1.new)
+
+    cert
+  end
+
   def test_resolve_extensions
     rsa2048 = OpenSSL::PKey::RSA.new TEST_KEY_RSA2048
     ca = OpenSSL::X509::Name.parse("/DC=org/DC=ruby-lang/CN=CA")
@@ -82,25 +121,23 @@ END
       [ "keyUsage", "keyCertSign, cRLSign", true ],
       [ "subjectKeyIdentifier", "hash", false ],
       [ "authorityKeyIdentifier", "keyid:always", false ],
-      [ "subjectAltName", "email:self@jruby.org", false ],
-      [ "subjectAltName", "DNS:jruby.org", false ],
+      [ "subjectAltName", "email:self@jruby.org, DNS:jruby.org", false ],
     ]
 
     now = Time.now
     ca_cert = issue_cert(ca, rsa2048, 1, now, now + 3600, ca_exts,
                          nil, nil, OpenSSL::Digest::SHA1.new)
 
-    assert_equal 6, ca_cert.extensions.size
+    assert_equal 5, ca_cert.extensions.size
 
     cert = OpenSSL::X509::Certificate.new ca_cert.to_der
-    assert_equal 6, cert.extensions.size
+    assert_equal 5, cert.extensions.size
 
     # Java 6/7 seems to maintain same order but Java 8 does definitely not :
     # TODO there must be something going on under - maybe not BC parsing ?!?
     if self.class.java6? || self.class.java7?
       assert_equal '97:39:9D:C3:FB:CD:BA:8F:54:0C:90:7B:46:3F:EA:D6:43:75:B1:CB', cert.extensions[2].value
-      assert_equal 'email:self@jruby.org', cert.extensions[4].value
-      assert_equal 'DNS:jruby.org', cert.extensions[5].value
+      assert_equal 'email:self@jruby.org, DNS:jruby.org', cert.extensions[4].value
     end
 
     exts = cert.extensions.dup
@@ -118,10 +155,7 @@ END
     assert ! ext.critical?
 
     assert ext = exts.find { |e| e.oid == 'subjectAltName' }, "missing 'subjectAltName' among: #{exts.join(', ')}"
-    assert_equal 'email:self@jruby.org', ext.value
-    exts.delete(ext)
-    assert ext = exts.find { |e| e.oid == 'subjectAltName' }, "missing 'subjectAltName' among: #{exts.join(', ')}"
-    assert_equal 'DNS:jruby.org', ext.value
+    assert_equal 'email:self@jruby.org, DNS:jruby.org', ext.value
   end
 
   def test_extensions
@@ -185,8 +219,17 @@ END
     cert = issue_cert(subj, key, s, now, now + 3600, exts, nil, nil, dgst)
 
     assert cert.inspect.start_with?('#<OpenSSL::X509::Certificate:')
-    assert cert.inspect.index('subject=/DC=org/DC=ruby-lang/CN=TestCA, issuer=/DC=org/DC=ruby-lang/CN=TestCA')
-    assert cert.inspect.index('serial=295990750012446699619010157040970350255')
+    if defined? JRUBY_VERSION
+      assert cert.inspect.index('subject=/DC=org/DC=ruby-lang/CN=TestCA, issuer=/DC=org/DC=ruby-lang/CN=TestCA')
+      assert cert.inspect.index('serial=295990750012446699619010157040970350255')
+      # TODO this isn't MRI compatible, which gives :
+      # #<OpenSSL::X509::Certificate:
+      #   subject=#<OpenSSL::X509::Name CN=TestCA,DC=ruby-lang,DC=org>,
+      #   issuer=#<OpenSSL::X509::Name CN=TestCA,DC=ruby-lang,DC=org>,
+      #   serial=#<OpenSSL::BN:0x00005627d4602938>,
+      #   not_before=2014-10-09 07:34:20 UTC,
+      #   not_after=2014-10-09 08:34:20 UTC>
+    end
     #assert cert.inspect.index('not_before=2014-10-09 07:34:20 UTC, not_after=2014-10-09 08:34:20 UTC')
 
     text_without_signature = <<-TEXT
@@ -279,7 +322,7 @@ EOF
     crt = File.expand_path('ca.crt', File.dirname(__FILE__))
     cert = OpenSSL::X509::Certificate.new File.read(crt)
     assert cert.to_text.index('X509v3 Authority Key Identifier:')
-    assert cert.to_text.match /X509v3 Authority Key Identifier:\s*keyid:BA:5E:E9:90:3B:5B:F6:79:A2:D3:65:09:C5:39:6A:E7:43:6B:F8:3D/m
+    assert cert.to_text.match /X509v3 Authority Key Identifier:\s*keyid:C6:17:42:6B:7F:B6:44:30:67:01:3D:44:83:9D:0F:B4:52:A1:D7:B7/m
   end
 
   def test_to_text_npe_regression
@@ -316,7 +359,8 @@ EOF
   def test_cert_loading_regression
     cert_text = "0\x82\x01\xAD0\x82\x01\xA1\xA0\x03\x02\x01\x02\x02\x01\x010\x03\x06\x01\x000g1\v0\t\x06\x03U\x04\x06\x13\x02US1\x130\x11\x06\x03U\x04\b\f\nCalifornia1\x150\x13\x06\x03U\x04\a\f\fSanta Monica1\x110\x0F\x06\x03U\x04\n\f\bOneLogin1\x190\x17\x06\x03U\x04\x03\f\x10app.onelogin.com0\x1E\x17\r100309095845Z\x17\r150309095845Z0g1\v0\t\x06\x03U\x04\x06\x13\x02US1\x130\x11\x06\x03U\x04\b\f\nCalifornia1\x150\x13\x06\x03U\x04\a\f\fSanta Monica1\x110\x0F\x06\x03U\x04\n\f\bOneLogin1\x190\x17\x06\x03U\x04\x03\f\x10app.onelogin.com0\x81\x9F0\r\x06\t*\x86H\x86\xF7\r\x01\x01\x01\x05\x00\x03\x81\x8D\x000\x81\x89\x02\x81\x81\x00\xE8\xD2\xBBW\xE3?/\x1D\xE7\x0E\x10\xC8\xBD~\xCD\xDE!#\rL\x92G\xDF\xE1f?L\xB1\xBC9\x99\x14\xE5\x84\xD2Zi\x87<>d\xBD\x81\xF9\xBA\x85\xD2\xFF\xAA\x90\xF3Z\x97\xA5\x1D\xB0W\xC0\x93\xA3\x06IP\xB84\xF5\xD7Qu\x19\xFCB\xCA\xA3\xD4\\\x8E\v\x9B%\x13|\xB6m\x9D\xA8\x16\xE6\xBB\xDA\x87\xFF\xE3\xD7\xE9\xBA9\xC5O\xA2\xA7C\xADB\x04\xCA\xA5\x0E\x84\xD0\xA8\xE4\xFA\xDA\xF1\x89\xF2s\xFA1\x95\xAF\x03\xAB1\xAA\xE7y\x02\x03\x01\x00\x010\x03\x06\x01\x00\x03\x01\x00"
     assert cert = OpenSSL::X509::Certificate.new(cert_text)
-    assert cert.to_text.index('itu-t')
+    debug cert.to_text
+    assert cert.to_text.index('Signature Algorithm: 0.0')
   end
 
   TEST_KEY_RSA1024 = <<-_end_of_pem_

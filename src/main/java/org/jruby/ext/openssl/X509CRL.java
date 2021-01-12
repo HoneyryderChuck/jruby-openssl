@@ -99,11 +99,10 @@ public class X509CRL extends RubyObject {
         }
     };
 
-    public static void createX509CRL(final Ruby runtime, final RubyModule _X509) {
-        RubyClass _CRL = _X509.defineClassUnder("CRL", runtime.getObject(), X509CRL_ALLOCATOR);
-        RubyClass _OpenSSLError = runtime.getModule("OpenSSL").getClass("OpenSSLError");
-        _X509.defineClassUnder("CRLError", _OpenSSLError, _OpenSSLError.getAllocator());
-        _CRL.defineAnnotatedMethods(X509CRL.class);
+    static void createX509CRL(final Ruby runtime, final RubyModule X509, final RubyClass OpenSSLError) {
+        RubyClass CRL = X509.defineClassUnder("CRL", runtime.getObject(), X509CRL_ALLOCATOR);
+        X509.defineClassUnder("CRLError", OpenSSLError, OpenSSLError.getAllocator());
+        CRL.defineAnnotatedMethods(X509CRL.class);
     }
 
     private RubyInteger version;
@@ -129,14 +128,15 @@ public class X509CRL extends RubyObject {
         super(runtime, type);
     }
 
-    private X509CRL(Ruby runtime) {
-        super(runtime, _CRL(runtime));
+    java.security.cert.X509CRL getCRL() {
+        return getCRL(false);
     }
 
-    java.security.cert.X509CRL getCRL() {
+    private java.security.cert.X509CRL getCRL(boolean allowNull) {
         if ( crl != null ) return crl;
         try {
             if ( crlHolder == null ) {
+                if ( allowNull ) return null;
                 throw new IllegalStateException("no crl holder");
             }
             final byte[] encoded = crlHolder.getEncoded();
@@ -169,32 +169,29 @@ public class X509CRL extends RubyObject {
 
     final byte[] getEncoded() throws IOException, CRLException {
         if ( crlHolder != null ) return crlHolder.getEncoded();
-        return getCRL().getEncoded();
+        java.security.cert.X509CRL crl = getCRL(true);
+        return crl == null ? new byte[0] : crl.getEncoded(); // TODO CRL.new isn't like MRI
     }
 
     private byte[] getSignature() {
         return getCRL().getSignature();
     }
 
-    private static boolean avoidJavaSecurity = false;
+    private static final boolean avoidJavaSecurity = false; // true NOT SUPPORTED
 
-    private static java.security.cert.X509CRL generateCRL(
-        final byte[] bytes, final int offset, final int length)
+    private static java.security.cert.X509CRL generateCRL(final byte[] bytes, final int offset, final int length)
         throws GeneralSecurityException {
         CertificateFactory factory = SecurityHelper.getCertificateFactory("X.509");
-        return (java.security.cert.X509CRL) factory.generateCRL(
-            new ByteArrayInputStream(bytes, offset, length)
-        );
+        return (java.security.cert.X509CRL) factory.generateCRL(new ByteArrayInputStream(bytes, offset, length));
     }
 
-    private static X509CRLHolder parseCRLHolder(
-        final byte[] bytes, final int offset, final int length) throws IOException {
+    private static X509CRLHolder parseCRLHolder(final byte[] bytes, final int offset, final int length)
+        throws IOException {
         return new X509CRLHolder(new ByteArrayInputStream(bytes, offset, length));
     }
 
     @JRubyMethod(name = "initialize", rest = true, visibility = Visibility.PRIVATE)
-    public IRubyObject initialize(final ThreadContext context,
-        final IRubyObject[] args, final Block block) {
+    public IRubyObject initialize(final ThreadContext context, final IRubyObject[] args, final Block block) {
         final Ruby runtime = context.runtime;
 
         this.extensions = runtime.newArray(8);
@@ -219,6 +216,10 @@ public class X509CRL extends RubyObject {
         catch (GeneralSecurityException e) {
             debugStackTrace(runtime, e);
             throw newCRLError(runtime, e);
+        }
+
+        if (this.crl == null) {
+            throw newCRLError(runtime, ""); // MRI: "header too long" for OpenSSL::X509::CRL.new('')
         }
 
         set_last_update( context, RubyTime.newTime(runtime, crl.getThisUpdate().getTime()) );
@@ -321,10 +322,7 @@ public class X509CRL extends RubyObject {
         try {
             return StringHelper.newString(context.runtime, getEncoded());
         }
-        catch (IOException e) {
-            throw newCRLError(context.runtime, e);
-        }
-        catch (CRLException e) {
+        catch (IOException|CRLException e) {
             throw newCRLError(context.runtime, e);
         }
     }
@@ -434,7 +432,7 @@ public class X509CRL extends RubyObject {
     }
 
     private RubyString signature_algorithm(final Ruby runtime) {
-        return RubyString.newString(runtime, getSignatureAlgorithm(runtime, "itu-t"));
+        return RubyString.newString(runtime, getSignatureAlgorithm(runtime, "NULL"));
     }
 
     private String getSignatureAlgorithm(final Ruby runtime, final String def) {
@@ -663,10 +661,6 @@ public class X509CRL extends RubyObject {
         return digAlg + "WITH" + keyAlg;
     }
 
-    private boolean isDSA(final PKey key) {
-        return "DSA".equalsIgnoreCase( key.getAlgorithm() );
-    }
-
     private ASN1Primitive getCRLValue(final Ruby runtime) {
         if ( this.crlValue != null ) return this.crlValue;
         return this.crlValue = readCRL( runtime );
@@ -692,6 +686,23 @@ public class X509CRL extends RubyObject {
             debug("CRL#verify() failed:", e);
             return context.runtime.getFalse();
         }
+    }
+
+    @Override
+    @JRubyMethod(name = "==")
+    public IRubyObject op_equal(ThreadContext context, IRubyObject obj) {
+        if (this == obj) return context.runtime.getTrue();
+        if (obj instanceof X509CRL) {
+            boolean equal;
+            try {
+                equal = Arrays.equals(getEncoded(), ((X509CRL) obj).getEncoded());
+            }
+            catch (IOException|CRLException e) {
+                throw newCRLError(context.runtime, e);
+            }
+            return context.runtime.newBoolean(equal);
+        }
+        return context.runtime.getFalse();
     }
 
     private static RubyClass _CRLError(final Ruby runtime) {

@@ -41,10 +41,8 @@ import org.jruby.runtime.Visibility;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 
-import static org.jruby.ext.openssl.OpenSSL._OpenSSLError;
 import static org.jruby.ext.openssl.OpenSSL.warn;
 import static org.jruby.ext.openssl.SSL._SSL;
-import static org.jruby.ext.openssl.OpenSSL.warn;
 
 /**
  * OpenSSL::SSL::Session
@@ -59,12 +57,11 @@ public class SSLSession extends RubyObject {
         }
     };
 
-    public static void createSession(final Ruby runtime, final RubyModule SSL) { // OpenSSL::SSL
+    static void createSession(final Ruby runtime, final RubyModule SSL, final RubyClass OpenSSLError) { // OpenSSL::SSL
         RubyClass Session = SSL.defineClassUnder("Session", runtime.getObject(), SESSION_ALLOCATOR);
-        Session.defineAnnotatedMethods(SSLSession.class);
         // OpenSSL::SSL::Session::SessionError
-        RubyClass OpenSSLError = _OpenSSLError(runtime);
         Session.defineClassUnder("SessionError", OpenSSLError, OpenSSLError.getAllocator());
+        Session.defineAnnotatedMethods(SSLSession.class);
     }
 
     private javax.net.ssl.SSLSession sslSession;
@@ -133,7 +130,7 @@ public class SSLSession extends RubyObject {
 
     @JRubyMethod(name = "id=")
     public IRubyObject set_id(final ThreadContext context, IRubyObject id) {
-        warn(context, "WARNING: Session#id= is not supported (read-only)");
+        warn(context, "OpenSSL::SSL::Session#id= is not supported (read-only)");
         return context.nil;
     }
 
@@ -145,7 +142,7 @@ public class SSLSession extends RubyObject {
 
     @JRubyMethod(name = "time=")
     public IRubyObject set_time(final ThreadContext context, IRubyObject time) {
-        warn(context, "WARNING: Session#time= is not supported (read-only)");
+        warn(context, "OpenSSL::SSL::Session#time= is not supported (read-only)");
         return context.nil;
     }
 
@@ -161,7 +158,7 @@ public class SSLSession extends RubyObject {
     public IRubyObject set_timeout(final ThreadContext context, IRubyObject timeout) {
         final SSLSessionContext sessionContext = sslSession().getSessionContext();
         if ( sessionContext == null ) {
-            warn(context, "WARNING: can not set Session#timeout=("+ timeout +") no session context");
+            warn(context, "WARNING: can not set OpenSSL::SSL::Session#timeout=("+ timeout +") no session context");
             return context.nil;
         }
         sessionContext.setSessionTimeout(RubyNumeric.fix2int(timeout)); // in seconds as well
@@ -170,8 +167,8 @@ public class SSLSession extends RubyObject {
 
     @Override
     public Object toJava(Class target) {
-        if ( javax.net.ssl.SSLSession.class.isAssignableFrom(target) ) {
-            return sslSession();
+        if ( javax.net.ssl.SSLSession.class == target || target.isInstance(sslSession) ) {
+            return sslSession;
         }
         return super.toJava(target);
     }

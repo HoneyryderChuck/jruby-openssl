@@ -2,7 +2,6 @@
  * The MIT License
  *
  * Copyright (c) 2014 Karol Bucek LTD.
- * Copyright (c) 2017 Ketan Padegaonkar
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -24,6 +23,10 @@
  */
 package org.jruby.ext.openssl;
 
+import java.security.NoSuchProviderException;
+import java.security.SecureRandom;
+import java.util.Map;
+
 import org.jruby.*;
 import org.jruby.anno.JRubyMethod;
 import org.jruby.anno.JRubyModule;
@@ -32,10 +35,6 @@ import org.jruby.runtime.Visibility;
 import org.jruby.runtime.builtin.IRubyObject;
 import org.jruby.util.ByteList;
 import org.jruby.util.SafePropertyAccessor;
-
-import java.security.NoSuchProviderException;
-import java.security.SecureRandom;
-import java.util.Map;
 
 /**
  * OpenSSL (methods as well as an entry point)
@@ -57,8 +56,10 @@ public final class OpenSSL {
         SecurityHelper.setRegisterProvider( SafePropertyAccessor.getBoolean("jruby.openssl.provider.register") );
 
         final RubyModule _OpenSSL = runtime.getOrCreateModule("OpenSSL");
-        RubyClass _StandardError = runtime.getClass("StandardError");
-        _OpenSSL.defineClassUnder("OpenSSLError", _StandardError, _StandardError.getAllocator());
+
+        RubyClass StandardError = runtime.getStandardError();
+        final RubyClass OpenSSLError = _OpenSSL.defineClassUnder("OpenSSLError", StandardError, StandardError.getAllocator());
+
         _OpenSSL.defineAnnotatedMethods(OpenSSL.class);
 
         // set OpenSSL debug internal flag early on so it can print traces even while loading extension
@@ -66,21 +67,24 @@ public final class OpenSSL {
 
         final String warn = SafePropertyAccessor.getProperty("jruby.openssl.warn");
         if ( warn != null ) OpenSSL.warn = Boolean.parseBoolean(warn);
+        else OpenSSL.warn = runtime.warningsEnabled();
 
-        PKey.createPKey(runtime, _OpenSSL);
-        BN.createBN(runtime, _OpenSSL);
-        Digest.createDigest(runtime, _OpenSSL);
-        Cipher.createCipher(runtime, _OpenSSL);
-        Random.createRandom(runtime, _OpenSSL);
-        HMAC.createHMAC(runtime, _OpenSSL);
-        Config.createConfig(runtime, _OpenSSL);
-        ASN1.createASN1(runtime, _OpenSSL);
-        X509.createX509(runtime, _OpenSSL);
-        NetscapeSPKI.createNetscapeSPKI(runtime, _OpenSSL);
-        SSL.createSSL(runtime, _OpenSSL);
-        PKCS7.createPKCS7(runtime, _OpenSSL);
+        // Config.createConfig(runtime, _OpenSSL);
+        ExtConfig.create(runtime, _OpenSSL);
+        PKey.createPKey(runtime, _OpenSSL, OpenSSLError);
+        BN.createBN(runtime, _OpenSSL, OpenSSLError);
+        Digest.createDigest(runtime, _OpenSSL, OpenSSLError);
+        Cipher.createCipher(runtime, _OpenSSL, OpenSSLError);
+        Random.createRandom(runtime, _OpenSSL, OpenSSLError);
+        HMAC.createHMAC(runtime, _OpenSSL, OpenSSLError);
+        ASN1.createASN1(runtime, _OpenSSL, OpenSSLError);
+        X509.createX509(runtime, _OpenSSL, OpenSSLError);
+        NetscapeSPKI.createNetscapeSPKI(runtime, _OpenSSL, OpenSSLError);
+        SSL.createSSL(runtime, _OpenSSL, OpenSSLError);
+        PKCS7.createPKCS7(runtime, _OpenSSL, OpenSSLError);
         PKCS5.createPKCS5(runtime, _OpenSSL);
-        OCSP.createOCSP(runtime, _OpenSSL);
+        OCSP.createOCSP(runtime, _OpenSSL, OpenSSLError);
+        KDF.createKDF(runtime, _OpenSSL, OpenSSLError);
 
         runtime.getLoadService().require("jopenssl/version");
 
@@ -96,18 +100,16 @@ public final class OpenSSL {
         // OpenSSL::FIPS: false
 
         final byte[] version = { '1','.','1','.','0' };
-        final boolean ruby18 = runtime.getInstanceConfig().getCompatVersion() == CompatVersion.RUBY1_8;
-        if ( ruby18 ) version[2] = '0'; // 1.0.0 compatible on 1.8
 
         _OpenSSL.setConstant("VERSION", StringHelper.newString(runtime, version));
 
-        final RubyModule _Jopenssl = runtime.getModule("Jopenssl");
-        final RubyString jVERSION = _Jopenssl.getConstantAt("VERSION").asString();
+        final RubyModule JOpenSSL = runtime.getModule("JOpenSSL");
+        final RubyString jVERSION = JOpenSSL.getConstantAt("VERSION").asString();
 
         final byte[] JRuby_OpenSSL_ = { 'J','R','u','b','y','-','O','p','e','n','S','S','L',' ' };
         final int OPENSSL_VERSION_NUMBER = 999999999; // NOTE: smt more useful?
 
-        ByteList OPENSSL_VERSION = new ByteList( jVERSION.getByteList().length() + JRuby_OpenSSL_.length );
+        ByteList OPENSSL_VERSION = new ByteList( jVERSION.getByteList().getRealSize() + JRuby_OpenSSL_.length );
         OPENSSL_VERSION.setEncoding( jVERSION.getEncoding() );
         OPENSSL_VERSION.append( JRuby_OpenSSL_ );
         OPENSSL_VERSION.append( jVERSION.getByteList() );
@@ -115,15 +117,13 @@ public final class OpenSSL {
         final RubyString VERSION;
         _OpenSSL.setConstant("OPENSSL_VERSION", VERSION = runtime.newString(OPENSSL_VERSION));
         _OpenSSL.setConstant("OPENSSL_VERSION_NUMBER", runtime.newFixnum(OPENSSL_VERSION_NUMBER));
-        if ( ! ruby18 ) {
-            // MRI 2.3 tests do: /\AOpenSSL +0\./ !~ OpenSSL::OPENSSL_LIBRARY_VERSION
-            _OpenSSL.setConstant("OPENSSL_LIBRARY_VERSION", VERSION);
-            _OpenSSL.setConstant("OPENSSL_FIPS", runtime.getFalse());
-        }
+        // MRI 2.3 tests do: /\AOpenSSL +0\./ !~ OpenSSL::OPENSSL_LIBRARY_VERSION
+        _OpenSSL.setConstant("OPENSSL_LIBRARY_VERSION", VERSION);
+        _OpenSSL.setConstant("OPENSSL_FIPS", runtime.getFalse());
     }
 
     static RubyClass _OpenSSLError(final Ruby runtime) {
-        return runtime.getModule("OpenSSL").getClass("OpenSSLError");
+        return (RubyClass) runtime.getModule("OpenSSL").getConstantAt("OpenSSLError");
     }
 
     // OpenSSL module methods :
@@ -159,7 +159,7 @@ public final class OpenSSL {
         // OpenSSL::Digest("MD5") -> OpenSSL::Digest::MD5
         final Ruby runtime = self.getRuntime();
         final RubyClass Digest = runtime.getModule("OpenSSL").getClass("Digest");
-        return Digest.getConstantAt( name.asString().toString() );
+        return Digest.getConstantAt( name.asJavaString() );
     }
 
     // API "stubs" in JRuby-OpenSSL :
@@ -178,7 +178,7 @@ public final class OpenSSL {
     @JRubyMethod(name = "fips_mode=", meta = true)
     public static IRubyObject set_fips_mode(ThreadContext context, IRubyObject self, IRubyObject value) {
         if ( value.isTrue() ) {
-            warn(context, "WARNING: FIPS mode not supported on JRuby-OpenSSL");
+            warn(context, "FIPS mode not supported on JRuby-OpenSSL");
         }
         return value;
     }
@@ -236,7 +236,7 @@ public final class OpenSSL {
     }
 
     static void warn(final ThreadContext context, final CharSequence msg) {
-        warn(context, RubyString.newString(context.runtime, msg));
+        if ( warn ) warn(context, RubyString.newString(context.runtime, msg));
     }
 
     static void warn(final ThreadContext context, final RubyString msg) {
@@ -247,35 +247,44 @@ public final class OpenSSL {
         if ( warn ) context.runtime.getModule("OpenSSL").callMethod(context, "warn", msg);
     }
 
-    public static String javaVersion(final String def) {
-        final String javaVersionProperty =
-                SafePropertyAccessor.getProperty("java.version", def);
-        if ("0".equals(javaVersionProperty)) return "1.7.0"; // Android
-        return javaVersionProperty;
-    }
-
-    static boolean javaVersion6(final boolean atLeast) {
-        final int gt = new Version("1.6").compareTo(new Version(javaVersion("0.0")));
-        return atLeast ? gt <= 0 : gt == 0;
+    private static String javaVersion(final String def, final int len) {
+        String javaVersion = SafePropertyAccessor.getProperty("java.version", def);
+        if ( "0".equals(javaVersion) ) javaVersion = "1.7.0"; // Android
+        return javaVersion.length() > len && len > -1 ? javaVersion.substring(0, len) : javaVersion;
     }
 
     static boolean javaVersion7(final boolean atLeast) {
-        final int gt = new Version("1.7").compareTo(new Version(javaVersion("0.0")));
+        final int gt = "1.7".compareTo( javaVersion("0.0", 3) );
         return atLeast ? gt <= 0 : gt == 0;
     }
 
     static boolean javaVersion8(final boolean atLeast) {
-        final int gt = new Version("1.8").compareTo(new Version(javaVersion("0.0")));
+        final int gt = "1.8".compareTo( javaVersion("0.0", 3) );
         return atLeast ? gt <= 0 : gt == 0;
     }
 
-    static boolean javaVersion9(final boolean atLeast) {
-        final int gt = new Version("9").compareTo(new Version(javaVersion("0.0")));
-        return atLeast ? gt <= 0 : gt == 0;
+    public static boolean javaVersion9(final boolean atLeast) {
+        final int major = parseIntDot( javaVersion("0", -1) );
+        return atLeast ? major >= 9 : major == 9;
+    }
+
+    static boolean javaVersion10(final boolean atLeast) {
+        final int major = parseIntDot( javaVersion("0", -1) );
+        return atLeast ? major >= 10 : major == 10;
+    }
+
+    private static int parseIntDot(String version) {
+        String[] parts = version.split("[-_]")[0].split("\\.");
+        try {
+            return Integer.parseInt(parts[0]);
+        }
+        catch (NumberFormatException ex) {
+            return -1;
+        }
     }
 
     private static String javaName(final String def) {
-        // Sun Java 6 or Oracle Java 7/8
+        // Sun Java 6 or Oracle Java 7/8/9/10
         // "Java HotSpot(TM) Server VM" or "Java HotSpot(TM) 64-Bit Server VM"
         // OpenJDK :
         // "OpenJDK 64-Bit Server VM"
@@ -327,6 +336,7 @@ public final class OpenSSL {
     // internals
 
     static IRubyObject to_der_if_possible(final ThreadContext context, IRubyObject obj) {
+        if ( obj instanceof RubyString || obj instanceof RubyIO ) return obj;
         if ( ! obj.respondsTo("to_der"))  return obj;
         return obj.callMethod(context, "to_der");
     }
@@ -339,31 +349,6 @@ public final class OpenSSL {
 
     static String bcExceptionMessage(NoClassDefFoundError ex) {
         return "You need to configure JVM/classpath to enable BouncyCastle Security Provider: " + ex;
-    }
-
-    static class Version implements Comparable<Version> {
-        public final int[] numbers;
-
-        public Version(String version) {
-            final String split[] = version.split("[-_]")[0].split("\\.");
-            numbers = new int[split.length];
-            for (int i = 0; i < split.length; i++) {
-                numbers[i] = Integer.valueOf(split[i]);
-            }
-        }
-
-        @Override
-        public int compareTo(Version another) {
-            final int maxLength = Math.max(numbers.length, another.numbers.length);
-            for (int i = 0; i < maxLength; i++) {
-                final int left = i < numbers.length ? numbers[i] : 0;
-                final int right = i < another.numbers.length ? another.numbers[i] : 0;
-                if (left != right) {
-                    return left < right ? -1 : 1;
-                }
-            }
-            return 0;
-        }
     }
 
 }

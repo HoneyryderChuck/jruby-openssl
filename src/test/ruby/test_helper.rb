@@ -21,12 +21,12 @@ else
   raise "bcpkix jar not found" unless jar; $CLASSPATH << jar
 end if defined? JRUBY_VERSION
 
-# NOTE: RUnit maven plugin (<= 1.0.5) does not handle test-unit well !
-#begin
-#  gem 'test-unit'
-#rescue LoadError
-#  puts "gem 'test-unit' not available, will load built-in 'test/unit'"
-#end
+begin
+  gem 'test-unit'
+rescue LoadError
+  warn "gem 'test-unit' not available, will load built-in 'test/unit'"
+end
+
 begin
   gem 'minitest'
   require 'minitest/autorun'
@@ -51,8 +51,10 @@ begin
         end
       end
   end
-rescue LoadError
-end
+rescue LoadError => e
+  warn "gem 'minitest' failed to load: #{e.inspect}"
+end unless (Test::Unit::AutoRunner.respond_to?(:setup_option)) rescue true # runit rules
+# @see https://github.com/torquebox/jruby-maven-plugins/blob/master/runit-maven-plugin/src/main/java/de/saumya/mojo/runit/RunitMavenTestScriptFactory.java
 
 if defined? Minitest::Test
   TestCase = Minitest::Test
@@ -60,6 +62,8 @@ else
   require 'test/unit'
   TestCase = Test::Unit::TestCase
 end
+
+puts "#{__FILE__} using #{TestCase}" if $VERBOSE || defined?(REPORT_PATH)
 
 TestCase.class_eval do
 
@@ -137,7 +141,19 @@ TestCase.class_eval do
 
   private
 
-  def issue_cert(dn, key, serial, not_before, not_after, extensions, issuer, issuer_key, digest)
+  def debug(msg); puts msg if $VERBOSE end
+
+  def issue_cert(*args)
+  # def issue_cert(dn, key, serial, not_before, not_after, extensions, issuer, issuer_key, digest)
+  # def issue_cert(dn, key, serial, extensions, issuer, issuer_key,
+  #                not_before: nil, not_after: nil, digest: "sha256")
+    if args.length == 9
+      dn, key, serial, not_before, not_after, extensions, issuer, issuer_key, digest = *args
+    else
+      dn, key, serial, extensions, issuer, issuer_key, opts = *args
+      opts ||= {}
+      not_before, not_after, digest = opts[:not_before], opts[:not_after], opts[:digest] || "sha256"
+    end
     cert = OpenSSL::X509::Certificate.new
     issuer = cert unless issuer
     issuer_key = key unless issuer_key
@@ -145,9 +161,10 @@ TestCase.class_eval do
     cert.serial = serial
     cert.subject = dn
     cert.issuer = issuer.subject
-    cert.public_key = key.public_key
-    cert.not_before = not_before
-    cert.not_after = not_after
+    cert.public_key = key
+    now = Time.now
+    cert.not_before = not_before || now - 3600
+    cert.not_after = not_after || now + 3600
     ef = OpenSSL::X509::ExtensionFactory.new
     ef.subject_certificate = cert
     ef.issuer_certificate = issuer
@@ -184,6 +201,15 @@ TestCase.class_eval do
     end
     crl.sign(issuer_key, digest)
     crl
+  end
+
+  def get_subject_key_id(cert)
+    asn1_cert = OpenSSL::ASN1.decode(cert)
+    tbscert   = asn1_cert.value[0]
+    pkinfo    = tbscert.value[6]
+    publickey = pkinfo.value[1]
+    pkvalue   = publickey.value
+    OpenSSL::Digest::SHA1.hexdigest(pkvalue).scan(/../).join(":").upcase
   end
 
 end
